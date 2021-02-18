@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union, TextIO
 import re
 import numpy as np
 from pathlib import Path
@@ -17,6 +17,12 @@ class MSA:
         self._depth = len(self.sequences)
         assert all(len(seq) == self._seqlen for seq in self.sequences), \
             "Seqlen Mismatch!"
+
+    def __repr__(self) -> str:
+        return (
+            f"MSA, L: {self.seqlen}, N: {self.depth}\n"
+            f"{self.array}"
+        )
 
     @property
     def array(self) -> np.ndarray:
@@ -57,7 +63,7 @@ class MSA:
     @classmethod
     def from_stockholm(
         cls,
-        stofile: PathLike,
+        stofile: Union[PathLike, TextIO],
         keep_insertions: bool = False,
     ) -> "MSA":
 
@@ -76,7 +82,7 @@ class MSA:
     @classmethod
     def from_fasta(
         cls,
-        fasfile: PathLike,
+        fasfile: Union[PathLike, TextIO],
     ) -> "MSA":
 
         output = []

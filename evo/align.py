@@ -1,4 +1,4 @@
-from typing import List, Tuple, Union, Iterator, Sequence
+from typing import List, Tuple, Union, Iterator, Sequence, TextIO
 import contextlib
 import math
 import tempfile
@@ -91,6 +91,12 @@ class MSA:
     def gap(self) -> Union[bytes, int]:
         return b"-" if self.dtype == np.dtype("S1") else ord("-")
 
+    def __repr__(self) -> str:
+        return (
+            f"MSA, L: {self.seqlen}, N: {self.depth}\n"
+            f"{self.array}"
+        )
+
     @property
     def array(self) -> np.ndarray:
         if not hasattr(self, "_array"):
@@ -163,7 +169,7 @@ class MSA:
     @classmethod
     def from_stockholm(
         cls,
-        stofile: PathLike,
+        stofile: Union[PathLike, TextIO],
         keep_insertions: bool = False,
         **kwargs,
     ) -> "MSA":
@@ -183,7 +189,7 @@ class MSA:
     @classmethod
     def from_fasta(
         cls,
-        fasfile: PathLike,
+        fasfile: Union[PathLike, TextIO],
         **kwargs,
     ) -> "MSA":
 

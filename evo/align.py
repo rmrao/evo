@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import subprocess
 import numpy as np
-from scipy.spatial.distance import squareform, pdist
+from scipy.spatial.distance import squareform, pdist, cdist
 from Bio import SeqIO
 from Bio.Seq import Seq
 from .typed import PathLike
@@ -92,13 +92,43 @@ class MSA:
         return b"-" if self.dtype == np.dtype("S1") else ord("-")
 
     def __repr__(self) -> str:
-        return (
-            f"MSA, L: {self.seqlen}, N: {self.depth}\n"
-            f"{self.array}"
-        )
+        return f"MSA, L: {self.seqlen}, N: {self.depth}\n" f"{self.array}"
 
     def __getitem__(self, idx):
         return self.array[idx]
+
+    def pdist(self) -> np.ndarray:
+        return squareform(pdist(self.array, "hamming"))
+
+    def greedy_select(self, num_seqs: int, mode: str = "max") -> "MSA":
+        assert mode in ("max", "min")
+        if self.depth <= num_seqs:
+            return self
+
+        optfunc = np.argmax if mode == "max" else np.argmin
+        all_indices = np.arange(self.depth)
+        indices = [0]
+        pairwise_distances = np.zeros((0, self.depth))
+        for _ in range(num_seqs - 1):
+            dist = cdist(self.array[indices[-1:]], self.array, "hamming")
+            pairwise_distances = np.concatenate([pairwise_distances, dist])
+            shifted_distance = np.delete(pairwise_distances, indices, axis=1).mean(0)
+            shifted_index = optfunc(shifted_distance)
+            index = np.delete(all_indices, indices)[shifted_index]
+            indices.append(index)
+        indices = sorted(indices)
+        return self.select(indices, axis="seqs")
+
+    def select_diverse(self, num_seqs: int, method: str = "best") -> "MSA":
+        assert method in ("fast", "best")
+        if num_seqs >= self.depth:
+            return self
+        msa = self.hhfilter(diff=num_seqs)
+        if method == "fast":
+            return msa.select(np.arange(num_seqs))
+        else:
+            msa = msa.greedy_select(num_seqs, mode="max")
+        return msa
 
     @property
     def array(self) -> np.ndarray:
@@ -152,9 +182,7 @@ class MSA:
     @property
     def weights(self) -> np.ndarray:
         if not hasattr(self, "_weights"):
-            self._weights = 1 / (
-                squareform(pdist(self.array, "hamming")) < self.seqid_cutoff
-            ).sum(1)
+            self._weights = 1 / (self.pdist() < self.seqid_cutoff).sum(1)
         return self._weights
 
     def neff(self, normalization: Union[float, str] = "none") -> float:

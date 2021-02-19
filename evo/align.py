@@ -98,7 +98,11 @@ class MSA:
         return self.array[idx]
 
     def pdist(self) -> np.ndarray:
-        return squareform(pdist(self.array, "hamming"))
+        dtype = self.dtype
+        self.dtype = np.uint8
+        dist = squareform(pdist(self.array, "hamming"))
+        self.dtype = dtype
+        return dist
 
     def greedy_select(self, num_seqs: int, mode: str = "max") -> "MSA":
         assert mode in ("max", "min")

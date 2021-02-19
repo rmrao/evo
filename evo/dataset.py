@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from .typed import PathLike
 from .align import MSA
+from .tokenization import Vocab
 
 
 class CollatableDataset(torch.utils.data.Dataset):
@@ -73,7 +74,7 @@ class NPZDataset(torch.utils.data.Dataset):
         if len(file_list) == 0:
             raise FileNotFoundError(f"No .npz files found in {data_file}")
 
-        self._file_list = file_list
+        self._file_list = sorted(file_list)
         self._lazy = lazy
 
     def __len__(self) -> int:
@@ -129,7 +130,7 @@ class A3MDataset(torch.utils.data.Dataset):
         if len(file_list) == 0:
             raise FileNotFoundError(f"No .a3m files found in {data_file}")
 
-        self._file_list = file_list
+        self._file_list = sorted(file_list)
         self._max_seqs_per_msa = max_seqs_per_msa
         self._sample_method = sample_method
 
@@ -144,3 +145,55 @@ class A3MDataset(torch.utils.data.Dataset):
         if self._max_seqs_per_msa is not None:
             msa = msa.select_diverse(self._max_seqs_per_msa, method=self._sample_method)
         return msa
+
+
+class MaskedTokenWrapperDataset(BaseWrapperDataset):
+    def __init__(
+        self,
+        dataset: CollatableDataset,
+        vocab: Vocab,
+        mask_prob: float = 0.15,
+        random_token_prob: float = 0.1,
+        leave_unmasked_prob: float = 0.1,
+    ):
+        # TODO - add column masking?
+        # TODO - add collater
+        super().__init__(dataset)
+        assert 0 <= mask_prob <= 1
+        assert 0 <= random_token_prob <= 1
+        assert 0 <= leave_unmasked_prob <= 1
+
+        self._mask_prob = mask_prob
+        self._random_token_prob = random_token_prob
+        self._leave_unmasked_prob = leave_unmasked_prob
+        self.vocab = vocab
+
+    def __getitem__(self, idx):
+        item = self.dataset[idx]
+        random_probs = torch.rand_like(item, dtype=torch.float)
+        random_probs[(item == self.vocab.bos_idx) | (item == self.vocab.eos_idx)] = 1
+        do_mask = random_probs < self.mask_prob
+
+        tgt = item.masked_fill(~do_mask, self.vocab.pad_idx)
+        mask_with_token = random_probs < (
+            self.mask_prob * (1 - self.leave_unmasked_prob)
+        )
+        src = item.masked_fill(mask_with_token, self.vocab.mask_idx)
+        mask_with_random = random_probs < (self.mask_prob * self.random_token_prob)
+        # TODO - maybe prevent special tokens?
+        rand_tokens = torch.randint_like(src, len(self.vocab))
+        src[mask_with_random] = rand_tokens[mask_with_random]
+
+        return src, tgt
+
+    @property
+    def mask_prob(self) -> float:
+        return self._mask_prob
+
+    @property
+    def random_token_prob(self) -> float:
+        return self._random_token_prob
+
+    @property
+    def leave_unmasked_prob(self) -> float:
+        return self._leave_unmasked_prob

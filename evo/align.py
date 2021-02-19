@@ -97,6 +97,9 @@ class MSA:
             f"{self.array}"
         )
 
+    def __getitem__(self, idx):
+        return self.array[idx]
+
     @property
     def array(self) -> np.ndarray:
         if not hasattr(self, "_array"):
@@ -105,12 +108,12 @@ class MSA:
 
     @property
     def dtype(self) -> type:
-        return self._array.dtype
+        return self.array.dtype
 
     @dtype.setter
     def dtype(self, value: type) -> None:
         assert value in (np.uint8, np.dtype("S1"))
-        self._array = self._array.view(value)
+        self._array = self.array.view(value)
 
     @property
     def seqlen(self) -> int:
@@ -137,7 +140,7 @@ class MSA:
     @property
     def is_covered(self) -> np.ndarray:
         if not hasattr(self, "_is_covered"):
-            self._is_covered = (self.array[1:] != self.gap).any(0)
+            self._is_covered = (self[1:] != self.gap).any(0)
         return self._is_covered
 
     @property

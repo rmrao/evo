@@ -1,11 +1,11 @@
-from typing import Dict, Optional
-import torch
+from typing import Dict, Optional, Union, Sequence
 import tape
 import transformers
 import numpy as np
 import esm
 from copy import copy
 import logging
+from .align import MSA
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class Vocab(object):
                 np.uint8
             )
         )
-        self.numpy_indices = torch.tensor(
+        self.numpy_indices = np.array(
             [self.index(chr(tok)) for tok in self.uint8_symbols],
             dtype=np.long,
         )
@@ -90,18 +90,53 @@ class Vocab(object):
     def to_dict(self) -> Dict[str, int]:
         return copy(self.tokens_to_idx)
 
-    def encode(self, sequence: str) -> torch.Tensor:
-        locs = np.digitize(
-            np.array(list(sequence), dtype="|S1").view(np.uint8),
-            self.uint8_symbols,
-            right=True,
+    def _convert_uint8_array(self, array: np.ndarray) -> np.ndarray:
+        assert array.dtype in (np.dtype("S1"), np.uint8)
+        array = array.view(np.uint8)
+        locs = np.digitize(array, self.uint8_symbols, right=True)
+        indices = self.numpy_indices[locs.reshape(-1)].reshape(locs.shape)
+        return indices
+
+    def add_special_tokens(self, array: np.ndarray) -> np.ndarray:
+        pad_widths = [(0, 0)] * (array.ndim - 1) + [
+            (int(self.prepend_bos), int(self.append_eos))
+        ]
+        return np.pad(
+            array,
+            pad_widths,
+            constant_values=[(self.bos_idx, self.eos_idx)],
         )
-        indices = self.numpy_indices[locs]
-        if self.prepend_bos:
-            indices = np.append(self.bos_idx, indices)
-        if self.append_eos:
-            indices = np.append(indices, self.eos_idx)
-        return torch.from_numpy(indices)
+
+    def encode_array(self, array: np.ndarray) -> np.ndarray:
+        return self.add_special_tokens(self._convert_uint8_array(array))
+
+    def encode_single_sequence(self, sequence: str) -> np.ndarray:
+        return self.encode_array(np.array(list(sequence), dtype="|S1"))
+
+    def encode_batched_sequences(self, sequences: Sequence[str]) -> np.ndarray:
+        batch_size = len(sequences)
+        max_seqlen = max(len(seq) for seq in sequences)
+        extra_token_pad = int(self.prepend_bos) + int(self.append_eos)
+        indices = np.full(
+            (batch_size, max_seqlen + extra_token_pad), fill_value=self.pad_idx
+        )
+
+        for i, seq in enumerate(sequences):
+            encoded = self.encode_single_sequence(seq)
+            indices[i, : len(encoded)] = encoded
+        return indices
+
+    def encode(self, inputs: Union[str, Sequence[str], np.ndarray, MSA]) -> np.ndarray:
+        if isinstance(inputs, str):
+            return self.encode_single_sequence(inputs)
+        elif isinstance(inputs, Sequence):
+            return self.encode_batched_sequences(inputs)
+        elif isinstance(inputs, np.ndarray):
+            return self.encode_array(inputs)
+        elif isinstance(inputs, MSA):
+            return self.encode_array(inputs.array)
+        else:
+            raise TypeError(f"Unknown input type {type(inputs)}")
 
     @classmethod
     def from_esm_alphabet(cls, alphabet: esm.data.Alphabet) -> "Vocab":

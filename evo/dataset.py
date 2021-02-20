@@ -64,7 +64,7 @@ class NPZDataset(torch.utils.data.Dataset):
             if len(split_files) == 0:
                 raise ValueError("Passed an empty split file set")
 
-            file_list = [f for f in file_glob if f.name in split_files]
+            file_list = [f for f in file_glob if f.stem in split_files]
             if len(file_list) != len(split_files):
                 num_missing = len(split_files) - len(file_list)
                 raise FileNotFoundError(
@@ -120,7 +120,7 @@ class A3MDataset(torch.utils.data.Dataset):
             if len(split_files) == 0:
                 raise ValueError("Passed an empty split file set")
 
-            file_list = [f for f in file_glob if f.name in split_files]
+            file_list = [f for f in file_glob if f.stem in split_files]
             if len(file_list) != len(split_files):
                 num_missing = len(split_files) - len(file_list)
                 raise FileNotFoundError(

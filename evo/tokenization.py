@@ -43,8 +43,7 @@ class Vocab(object):
                 mask_token,
                 pad_token,
             }:
-                logger.warning(f"Removing non-special token of length > 1: {tok}")
-                tokens.pop(tok)
+                logger.warning(f"Vocab contains non-special token of length > 1: {tok}")
 
         self.tokens_to_idx = tokens
         self.tokens = list(tokens.keys())
@@ -86,6 +85,9 @@ class Vocab(object):
 
     def __len__(self):
         return len(self.tokens)
+
+    def __repr__(self) -> str:
+        return f"Vocab({self.to_dict()})"
 
     def to_dict(self) -> Dict[str, int]:
         return copy(self.tokens_to_idx)

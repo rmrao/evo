@@ -2,8 +2,10 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+from .tensor import coerce_numpy
 
 
+@coerce_numpy
 def compute_precisions(
     predictions: torch.Tensor,
     targets: torch.Tensor,

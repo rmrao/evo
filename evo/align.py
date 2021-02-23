@@ -108,6 +108,8 @@ class MSA:
         assert mode in ("max", "min")
         if self.depth <= num_seqs:
             return self
+        dtype = self.dtype
+        self.dtype = np.uint8
 
         optfunc = np.argmax if mode == "max" else np.argmin
         all_indices = np.arange(self.depth)
@@ -121,6 +123,7 @@ class MSA:
             index = np.delete(all_indices, indices)[shifted_index]
             indices.append(index)
         indices = sorted(indices)
+        self.dtype = dtype
         return self.select(indices, axis="seqs")
 
     def select_diverse(self, num_seqs: int, method: str = "best") -> "MSA":

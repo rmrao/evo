@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Union, Sequence
+import torch
 import tape
 import transformers
 import numpy as np
@@ -128,6 +129,9 @@ class Vocab(object):
             indices[i, : len(encoded)] = encoded
         return indices
 
+    def decode_single_sequence(self, array: np.ndarray) -> str:
+        return "".join(self.token(idx) for idx in array)
+
     def encode(self, inputs: Union[str, Sequence[str], np.ndarray, MSA]) -> np.ndarray:
         if isinstance(inputs, str):
             return self.encode_single_sequence(inputs)
@@ -139,6 +143,23 @@ class Vocab(object):
             return self.encode_array(inputs.array)
         else:
             raise TypeError(f"Unknown input type {type(inputs)}")
+
+    def decode(
+        self, tokens: Union[np.ndarray, torch.Tensor]
+    ) -> Union[str, Sequence[str]]:
+        if isinstance(tokens, torch.Tensor):
+            tokens = tokens.cpu().numpy()
+
+        if tokens.ndim == 1:
+            return self.decode_single_sequence(tokens)
+        elif tokens.ndim == 2:
+            return [self.decode_single_sequence(toks) for toks in tokens]
+        elif tokens.ndim == 3:
+            assert tokens.shape[0] == 1, "Cannot decode w/ batch size > 1"
+            tokens = tokens[0]
+            return self.decode(tokens)
+        else:
+            raise ValueError("Too many dimensions!")
 
     @classmethod
     def from_esm_alphabet(cls, alphabet: esm.data.Alphabet) -> "Vocab":

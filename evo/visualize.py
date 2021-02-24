@@ -19,7 +19,7 @@ def plot_attentions(
     attentions: Union[torch.Tensor, np.ndarray],
     ax: Optional[mpl.axes.Axes] = None,
     img: Optional[mpl.image.AxesImage] = None,
-    cmap: str = "Reds",
+    cmap: str = "Blues",
 ) -> mpl.image.AxesImage:
 
     if isinstance(attentions, torch.Tensor):
@@ -39,7 +39,7 @@ def plot_contacts_and_attentions(
     contacts: Union[torch.Tensor, np.ndarray],
     ax: Optional[mpl.axes.Axes] = None,
     artists: Optional[ContactAndAttentionArtists] = None,
-    cmap: str = "Reds",
+    cmap: str = "Blues",
     ms: float = 1,
     title: Union[bool, str, Callable[[float], str]] = True,
     animated: bool = False,
@@ -106,7 +106,7 @@ def animate_contacts_and_attentions(
     fig: Optional[mpl.figure.Figure] = None,
     ax: Optional[mpl.axes.Axes] = None,
     artists: Optional[ContactAndAttentionArtists] = None,
-    cmap: str = "Reds",
+    cmap: str = "Blues",
     ms: float = 1,
     title: Union[bool, str, Callable[[int, float], str]] = True,
     interval: int = 500,

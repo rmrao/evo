@@ -193,11 +193,13 @@ class MaxTokenBatch(object):
 BatchOrSequence = TypeVar("BatchOrSequence", MaxTokenBatch, Sequence[MaxTokenBatch])
 
 
-class AutoBatchingDataset(torch.utils.data.IterableDataset, BaseWrapperDataset):
+class AutoBatchingDataset(torch.utils.data.IterableDataset):
     def __init__(
         self, dataset: CollatableVocabDataset, max_tokens: int, shuffle: bool = False
     ):
-        super().__init__(dataset)
+        super().__init__()
+        self.dataset = dataset
+        self.vocab = dataset.vocab
         self.max_tokens = max_tokens
         self.shuffle = shuffle
 

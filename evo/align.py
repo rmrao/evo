@@ -130,9 +130,12 @@ class MSA:
         assert method in ("fast", "best")
         if num_seqs >= self.depth:
             return self
+
         msa = self.hhfilter(diff=num_seqs)
-        if method == "fast":
-            return msa.select(np.arange(num_seqs))
+        if num_seqs >= msa.depth:
+            return msa
+        elif method == "fast":
+            msa = msa.select(np.arange(num_seqs))
         else:
             msa = msa.greedy_select(num_seqs, mode="max")
         return msa

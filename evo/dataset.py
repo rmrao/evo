@@ -230,7 +230,7 @@ class AutoBatchingDataset(torch.utils.data.IterableDataset):
         return batch, can_add  # type: ignore
 
     def __iter__(self):
-        indices = np.arange(len(self))
+        indices = np.arange(len(self.dataset))
 
         if dist.is_available() and dist.is_initialized():
             world_size = dist.get_world_size()
@@ -362,3 +362,12 @@ class MaskedTokenWrapperDataset(BaseWrapperDataset):
     @property
     def leave_unmasked_prob(self) -> float:
         return self._leave_unmasked_prob
+
+    def collater(self, batch: List[Any]) -> Any:
+        src = collate_tensors(
+            [el[0] for el in batch], constant_value=self.vocab.pad_idx,
+        )
+        tgt = collate_tensors(
+            [el[1] for el in batch], constant_value=self.vocab.pad_idx,
+        )
+        return src, tgt

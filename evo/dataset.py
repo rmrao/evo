@@ -1,13 +1,78 @@
-from typing import List, Any, Optional, Collection, TypeVar, Sequence, Union, Tuple
+from typing import (
+    List,
+    Any,
+    Optional,
+    Collection,
+    TypeVar,
+    Sequence,
+    Union,
+    Tuple,
+    Callable,
+    Dict,
+)
+import threading
 import math
 from pathlib import Path
 import torch
 import torch.distributed as dist
 import numpy as np
+from operator import methodcaller
+import subprocess
+from tqdm import tqdm
 from .tensor import collate_tensors
 from .typed import PathLike
 from .align import MSA
 from .tokenization import Vocab
+
+
+T = TypeVar("T")
+
+
+class ThreadsafeFile:
+    def __init__(
+        self,
+        filepath: PathLike,
+        open_func: Callable[[PathLike], T],
+        close_func: Callable[[T], None] = methodcaller("close"),
+    ):
+        self._threadlocal = threading.local()
+        self._filepath = filepath
+        self._open_func = open_func
+        self._close_func = close_func
+
+    def __getattr__(self, name: str):
+        return getattr(self.file, name)
+
+    @property
+    def file(self) -> T:
+        if not hasattr(self._threadlocal, "file"):
+            self._threadlocal.file = self._open_func(self._filepath)
+        return self._threadlocal.file
+
+    def __getstate__(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items() if k != "_threadlocal"}
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.__dict__ = state
+        self._threadlocal = threading.local()
+
+    def __del__(self):
+        if hasattr(self._threadlocal, "file"):
+            self._close_func(self._threadlocal.file)
+            del self._threadlocal.file
+
+
+class SizedDataset(torch.utils.data.Dataset):
+    def __init__(self, sizes: np.ndarray, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # type: ignore
+        self._sizes = sizes
+
+    def __len__(self):
+        return len(self.sizes)
+
+    @property
+    def sizes(self):
+        return self._sizes
 
 
 class CollatableDataset(torch.utils.data.Dataset):
@@ -19,7 +84,8 @@ class CollatableDataset(torch.utils.data.Dataset):
 
 
 class CollatableVocabDataset(CollatableDataset):
-    def __init__(self, vocab: Vocab):
+    def __init__(self, vocab: Vocab, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # type: ignore
         self.vocab = vocab
 
 
@@ -155,6 +221,69 @@ class A3MDataset(torch.utils.data.Dataset):
         return msa
 
 
+class FastaDataset(SizedDataset):
+    """
+    For loading protein sequence datasets in the common FASTA data format
+
+    Modified from github.com/pytorch/fairseq.
+    """
+
+    def __init__(self, data_file: PathLike, cache_indices: bool = False):
+        self.data_file = data_file
+        self.file = ThreadsafeFile(data_file, open)
+        self.cache = Path(f"{data_file}.idx.npy")
+        if cache_indices:
+            if self.cache.exists():
+                self.offsets, sizes = np.load(self.cache)
+            else:
+                self.offsets, sizes = self._build_index()
+                np.save(self.cache, np.stack([self.offsets, self.sizes]))
+        else:
+            self.offsets, sizes = self._build_index()
+
+        super().__init__(sizes)
+
+    def __getitem__(self, idx):
+        self.file.seek(self.offsets[idx])
+        if idx == len(self) - 1:
+            data = self.file.read()
+        else:
+            data = self.file.read(self.offsets[idx + 1] - self.offsets[idx])
+        desc, *seq = data.split()
+        return desc[1:], "".join(seq)
+
+    def __len__(self):
+        return self.offsets.size
+
+    def _build_index(self):
+        # Use grep and awk to get 100M/s on local SSD.
+        # Should process your enormous 100G fasta in ~10 min single core...
+        bytes_offsets = subprocess.check_output(
+            f"cat {self.data_file} | tqdm --bytes --total $(wc -c < {self.data_file})"
+            "| grep --byte-offset '^>' -o | cut -d: -f1",
+            shell=True,
+        )
+        fasta_lengths = subprocess.check_output(
+            f"cat {self.data_file} | tqdm --bytes --total $(wc -c < {self.data_file})"
+            '| awk \'/^>/ {print "";next;} { printf("%s",$0);}\' | tail -n+2 | awk '
+            "'{print length($1)}'",
+            shell=True,
+        )
+        bytes_np = np.fromstring(bytes_offsets, dtype=np.int64, sep=" ")
+        sizes_np = np.fromstring(fasta_lengths, dtype=np.int64, sep=" ")
+        return bytes_np, sizes_np
+
+
+class EncodedFastaDataset(CollatableVocabDataset, FastaDataset):
+
+    def __init__(self, data_file: PathLike, vocab: Vocab):
+        super().__init__(data_file=data_file, vocab=vocab, cache_indices=True)
+
+    def __getitem__(self, index: int) -> torch.Tensor:
+        desc, seq = super().__getitem__(index)
+        return torch.from_numpy(self.vocab.encode_single_sequence(seq))
+
+
 class MaxTokenBatch(object):
     def __init__(self, max_tokens: int, pad_idx: int):
         self.max_tokens = max_tokens
@@ -245,7 +374,7 @@ class AutoBatchingDataset(torch.utils.data.IterableDataset):
             worker_rank = worker_rank * worker_rank.num_workers + worker_info.id
 
         chunk_size = math.ceil(len(indices) / world_size)
-        indices = indices[chunk_size * worker_rank:chunk_size * (worker_rank + 1)]
+        indices = indices[chunk_size * worker_rank : chunk_size * (worker_rank + 1)]
 
         if self.shuffle:
             indices = np.random.permutation(indices)
@@ -268,6 +397,39 @@ class AutoBatchingDataset(torch.utils.data.IterableDataset):
                 yield batch.finalize()
             else:
                 yield type(items)(b.finalize() for b in batch)
+
+
+class BatchBySequenceLength(torch.utils.data.Sampler):
+    def __init__(self, dataset: SizedDataset, max_tokens: int):
+        super().__init__(dataset)
+        self.dataset = dataset
+        self.max_tokens = max_tokens
+
+        indices = np.argsort(self.dataset.sizes)
+        sizes = self.dataset.sizes[indices]
+        batches: List[List[int]] = []
+        batch: List[int] = []
+        batch_size = 0
+        for idx, size in zip(tqdm(indices, desc="Batching Data"), sizes):
+            if size > self.max_tokens:
+                raise RuntimeError(
+                    f"Item at index {idx} too large! "
+                    f"Length: {size}, Max Tokens: {self.max_tokens}"
+                )
+            if size + batch_size > self.max_tokens:
+                batches.append(batch)
+                batch = []
+                batch_size = 0
+            batch.append(idx)
+            batch_size += size
+
+        self.batches = batches
+
+    def __iter__(self):
+        yield from self.batches
+
+    def __len__(self):
+        return len(self.batches)
 
 
 class RandomCropDataset(BaseWrapperDataset):
@@ -297,15 +459,22 @@ class RandomCropDataset(BaseWrapperDataset):
 
 
 class SubsampleMSADataset(BaseWrapperDataset):
-    def __init__(self, dataset: CollatableVocabDataset, max_tokens: int):
+    def __init__(
+        self,
+        dataset: CollatableVocabDataset,
+        max_tokens: int,
+        max_seqs: Optional[int] = None,
+    ):
         super().__init__(dataset)
         self.max_tokens = max_tokens
+        self.max_seqs = max_seqs if max_seqs is not None else float("inf")
 
     def __getitem__(self, idx):
         msa = self.dataset[idx]
 
         num_alignments, seqlen = msa.size()
         max_alignments = self.max_tokens // seqlen
+        max_alignments = min(self.max_seqs, max_alignments)
         if max_alignments < num_alignments:
             indices = np.random.randint(1, num_alignments, size=max_alignments - 1)
             indices = np.append(0, indices)
@@ -365,9 +534,11 @@ class MaskedTokenWrapperDataset(BaseWrapperDataset):
 
     def collater(self, batch: List[Any]) -> Any:
         src = collate_tensors(
-            [el[0] for el in batch], constant_value=self.vocab.pad_idx,
+            [el[0] for el in batch],
+            constant_value=self.vocab.pad_idx,
         )
         tgt = collate_tensors(
-            [el[1] for el in batch], constant_value=self.vocab.pad_idx,
+            [el[1] for el in batch],
+            constant_value=self.vocab.pad_idx,
         )
         return src, tgt

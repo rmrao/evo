@@ -19,6 +19,8 @@ import numpy as np
 from operator import methodcaller
 import subprocess
 from tqdm import tqdm
+from Bio import SeqIO
+import numba
 from .tensor import collate_tensors
 from .typed import PathLike
 from .align import MSA
@@ -100,14 +102,14 @@ class BaseWrapperDataset(CollatableVocabDataset):
         super().__init__(dataset.vocab)
         self.dataset = dataset
 
-    def __getitem__(self, idx):
-        return self.dataset[idx]
+    def __getattr__(self, name: str):
+        return getattr(self.dataset, name)
+
+    def __getitem__(self, index: int):
+        return self.dataset[index]
 
     def __len__(self):
         return len(self.dataset)
-
-    def collater(self, batch: List[Any]) -> Any:
-        return self.dataset.collater(batch)
 
 
 class NPZDataset(torch.utils.data.Dataset):
@@ -214,11 +216,16 @@ class A3MDataset(torch.utils.data.Dataset):
     def __getitem__(self, index: int):
         if not 0 <= index < len(self):
             raise IndexError(index)
-
-        msa = MSA.from_fasta(self._file_list[index])
-        if self._max_seqs_per_msa is not None:
-            msa = msa.select_diverse(self._max_seqs_per_msa, method=self._sample_method)
-        return msa
+        if self._max_seqs_per_msa == 1:
+            seq = str(next(SeqIO.parse(self._file_list[index], "fasta")).seq)
+            return seq
+        else:
+            msa = MSA.from_fasta(self._file_list[index])
+            if self._max_seqs_per_msa is not None:
+                msa = msa.select_diverse(
+                    self._max_seqs_per_msa, method=self._sample_method
+                )
+            return msa
 
 
 class FastaDataset(SizedDataset):
@@ -275,13 +282,16 @@ class FastaDataset(SizedDataset):
 
 
 class EncodedFastaDataset(CollatableVocabDataset, FastaDataset):
-
     def __init__(self, data_file: PathLike, vocab: Vocab):
         super().__init__(data_file=data_file, vocab=vocab, cache_indices=True)
+        self._sizes += int(self.vocab.prepend_bos) + int(self.vocab.append_eos)
 
     def __getitem__(self, index: int) -> torch.Tensor:
         desc, seq = super().__getitem__(index)
         return torch.from_numpy(self.vocab.encode_single_sequence(seq))
+
+    def collater(self, batch):
+        return collate_tensors(batch, constant_value=self.vocab.pad_idx)
 
 
 class MaxTokenBatch(object):
@@ -399,37 +409,98 @@ class AutoBatchingDataset(torch.utils.data.IterableDataset):
                 yield type(items)(b.finalize() for b in batch)
 
 
+@numba.njit
+def batch_by_size(
+    indices: np.ndarray, sizes: np.ndarray, max_tokens: int
+) -> List[List[int]]:
+    batches: List[List[int]] = []
+    batch: List[int] = [0][:0]
+    batch_size = 0
+    for i in range(len(indices)):
+        idx = indices[i]
+        size = sizes[i]
+        if size > max_tokens:
+            raise RuntimeError("An item was too large to batch.")
+        if size + batch_size > max_tokens:
+            batches.append(batch)
+            batch = [0][:0]
+            batch_size = 0
+        batch.append(idx)
+        batch_size += size
+    batches.append(batch)
+    return batches
+
+
 class BatchBySequenceLength(torch.utils.data.Sampler):
-    def __init__(self, dataset: SizedDataset, max_tokens: int):
+    def __init__(
+        self,
+        dataset: SizedDataset,
+        max_tokens: int,
+        shuffle=True,
+        seed=0,
+    ):
         super().__init__(dataset)
+        indices = np.argsort(dataset.sizes)
+        sizes = dataset.sizes[indices]
+        batches = batch_by_size(indices, sizes, max_tokens)
+
         self.dataset = dataset
         self.max_tokens = max_tokens
-
-        indices = np.argsort(self.dataset.sizes)
-        sizes = self.dataset.sizes[indices]
-        batches: List[List[int]] = []
-        batch: List[int] = []
-        batch_size = 0
-        for idx, size in zip(tqdm(indices, desc="Batching Data"), sizes):
-            if size > self.max_tokens:
-                raise RuntimeError(
-                    f"Item at index {idx} too large! "
-                    f"Length: {size}, Max Tokens: {self.max_tokens}"
-                )
-            if size + batch_size > self.max_tokens:
-                batches.append(batch)
-                batch = []
-                batch_size = 0
-            batch.append(idx)
-            batch_size += size
-
+        self.shuffle = shuffle
         self.batches = batches
+        self.seed = seed
+        self.epoch = 0
 
     def __iter__(self):
-        yield from self.batches
+        if self.shuffle:
+            # deterministically shuffle based on epoch and seed
+            g = torch.Generator()
+            g.manual_seed(self.seed + self.epoch)
+            indices = torch.randperm(len(self.batches), generator=g).tolist()
+        else:
+            indices = list(range(len(self.batches)))
+
+        # add extra samples to make it evenly divisible
+        indices += indices[:(self.total_size - len(indices))]
+        assert len(indices) == self.total_size
+
+        # subsample
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        assert len(indices) == len(self)
+        print("Num Replicas", self.num_replicas, "Length", len(self))
+        yield from (self.batches[idx] for idx in indices)
 
     def __len__(self):
-        return len(self.batches)
+        return math.ceil(len(self.batches) / self.num_replicas)
+
+    @property
+    def num_replicas(self) -> int:
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_world_size()
+        else:
+            return 1
+
+    @property
+    def total_size(self) -> int:
+        return len(self) * self.num_replicas
+
+    @property
+    def rank(self) -> int:
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank()
+        else:
+            return 0
+
+    def set_epoch(self, epoch):
+        r"""
+        Sets the epoch for this sampler. When :attr:`shuffle=True`, this ensures all
+        replicas use a different random ordering for each epoch. Otherwise, the next
+        iteration of this sampler will yield the same ordering.
+
+        Arguments:
+            epoch (int): Epoch number.
+        """
+        self.epoch = epoch
 
 
 class RandomCropDataset(BaseWrapperDataset):
@@ -438,6 +509,7 @@ class RandomCropDataset(BaseWrapperDataset):
         self.max_seqlen = max_seqlen
         self.num_special = int(self.vocab.prepend_bos) + int(self.vocab.append_eos)
         self.max_seqlen_no_special = self.max_seqlen - self.num_special
+        self.sizes = np.minimum(self.sizes, max_seqlen)  # type: ignore
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
@@ -517,7 +589,6 @@ class MaskedTokenWrapperDataset(BaseWrapperDataset):
         # TODO - maybe prevent special tokens?
         rand_tokens = torch.randint_like(src, len(self.vocab))
         src[mask_with_random] = rand_tokens[mask_with_random]
-
         return src, tgt
 
     @property

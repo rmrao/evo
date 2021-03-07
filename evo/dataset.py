@@ -467,7 +467,6 @@ class BatchBySequenceLength(torch.utils.data.Sampler):
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == len(self)
-        print("Num Replicas", self.num_replicas, "Length", len(self))
         yield from (self.batches[idx] for idx in indices)
 
     def __len__(self):

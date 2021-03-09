@@ -1,0 +1,10 @@
+pandas
+torch
+numpy
+tqdm
+biopython
+numba
+matplotlib
+transformers
+tape-proteins
+git+git://github.com/facebookresearch/esm@master#egg=esm

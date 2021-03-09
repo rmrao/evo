@@ -244,7 +244,7 @@ class FastaDataset(SizedDataset):
                 self.offsets, sizes = np.load(self.cache)
             else:
                 self.offsets, sizes = self._build_index()
-                np.save(self.cache, np.stack([self.offsets, self.sizes]))
+                np.save(self.cache, np.stack([self.offsets, sizes]))
         else:
             self.offsets, sizes = self._build_index()
 

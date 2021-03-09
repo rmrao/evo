@@ -23,6 +23,10 @@ with open("LICENSE", "r") as lf:
 
 with open("requirements.txt", "r") as reqs:
     requirements = reqs.read().split()
+    for i, requirement in enumerate(requirements):
+        if requirement.startswith("git+"):
+            package_name = requirement.rsplit("=", maxsplit=1)[1]
+            requirements[i] = f"{package_name} @ {requirement}"
 
 setup(
     name="evo",

@@ -231,6 +231,8 @@ class MSA:
     def from_fasta(
         cls,
         fasfile: Union[PathLike, TextIO],
+        keep_insertions: bool = False,
+        uppercase: bool = False,
         **kwargs,
     ) -> "MSA":
 
@@ -238,7 +240,10 @@ class MSA:
         for record in SeqIO.parse(fasfile, "fasta"):
             description = record.description
             sequence = str(record.seq)
-            sequence = re.sub(r"([a-z]|\.|\*)", "", sequence)
+            if not keep_insertions:
+                sequence = re.sub(r"([a-z]|\.|\*)", "", sequence)
+            if uppercase:
+                sequence = sequence.upper()
             output.append((description, sequence))
         return cls(output, **kwargs)
 
@@ -253,8 +258,7 @@ class MSA:
         if filename.suffix == ".sto":
             return cls.from_stockholm(filename, keep_insertions, **kwargs)
         elif filename.suffix in (".fas", ".fasta", ".a3m"):
-            assert not keep_insertions
-            return cls.from_fasta(filename, **kwargs)
+            return cls.from_fasta(filename, keep_insertions, **kwargs)
         else:
             raise ValueError(f"Unknown file format {filename.suffix}")
 

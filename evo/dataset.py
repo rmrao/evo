@@ -151,7 +151,12 @@ class NPZDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .npz files found in {data_file}")
 
         self._file_list = sorted(file_list)
+        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._lazy = lazy
+
+    def get(self, key: str):
+        index = self._keys[key]
+        return self[index]
 
     def __len__(self) -> int:
         return len(self._file_list)
@@ -207,8 +212,13 @@ class A3MDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .a3m files found in {data_file}")
 
         self._file_list = sorted(file_list)
+        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._max_seqs_per_msa = max_seqs_per_msa
         self._sample_method = sample_method
+
+    def get(self, key: str):
+        index = self._keys[key]
+        return self[index]
 
     def __len__(self) -> int:
         return len(self._file_list)
@@ -289,6 +299,21 @@ class EncodedFastaDataset(CollatableVocabDataset, FastaDataset):
     def __getitem__(self, index: int) -> torch.Tensor:
         desc, seq = super().__getitem__(index)
         return torch.from_numpy(self.vocab.encode_single_sequence(seq))
+
+
+class TorchDataset(CollatableVocabDataset):
+    def __init__(self, data_file: PathLike, vocab: Vocab):
+        data_file = Path(data_file)
+        self.data_file = data_file
+        self.data = torch.load(data_file)
+        self.offsets, self.sizes = np.load(data_file.with_suffix(".fasta.idx.npy"))
+
+    def __len__(self):
+        return len(self.offsets)
+
+    def __getitem__(self, idx):
+        item = self.data[self.offsets[idx]:self.offsets[idx] + self.sizes[idx]]
+        return item
 
     def collater(self, batch):
         return collate_tensors(batch, constant_value=self.vocab.pad_idx)

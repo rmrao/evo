@@ -2,9 +2,25 @@ from typing import Sequence, TypeVar, Callable
 import functools
 import torch
 import numpy as np
+import contextlib
 
 
 TensorLike = TypeVar("TensorLike", np.ndarray, torch.Tensor)
+
+
+@contextlib.contextmanager
+def numpy_seed(seed):
+    """Context manager which seeds the NumPy PRNG with the specified seed and
+    restores the state afterward. Taken from github.com/pytorch/fairseq"""
+    if seed is None:
+        yield
+        return
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
 
 
 def collate_tensors(

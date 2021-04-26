@@ -236,7 +236,12 @@ class FastaDataset(SizedDataset):
     """
 
     def __init__(self, data_file: PathLike, cache_indices: bool = False):
-        self.data_file = data_file
+        self.data_file = Path(data_file)
+        if not self.data_file.exists():
+            raise FileNotFoundError(
+                f"{self.data_file}\n"
+                "If using hydra, make sure you are using abolute instead of relative paths."
+            )
         self.file = ThreadsafeFile(data_file, open)
         self.cache = Path(f"{data_file}.idx.npy")
         if cache_indices:
@@ -399,8 +404,6 @@ class AutoBatchingDataset(torch.utils.data.IterableDataset):
                 else:
                     yield type(items)(b.finalize() for b in batch)
                 batch, added = self.maybe_make_and_add_batch(None, items)
-                if not added:
-                    breakpoint()
                 assert added, "Item size too large to include!"
         if batch:
             if isinstance(batch, MaxTokenBatch):

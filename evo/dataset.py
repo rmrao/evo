@@ -266,7 +266,7 @@ class FastaDataset(SizedDataset):
             data = self.file.read()
         else:
             data = self.file.read(self.offsets[idx + 1] - self.offsets[idx])
-        desc, *seq = data.split()
+        desc, *seq = data.split("\n")
         return desc[1:], "".join(seq)
 
     def __len__(self):

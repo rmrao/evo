@@ -46,18 +46,28 @@ class Vocab(object):
             }:
                 logger.warning(f"Vocab contains non-special token of length > 1: {tok}")
 
-        self.tokens_to_idx = tokens
-        self.tokens = list(tokens.keys())
-        self.bos_token = bos_token
-        self.eos_token = eos_token
-        self.unk_token = unk_token
-        self.mask_token = mask_token
-        self.pad_token = pad_token
         self.prepend_bos = prepend_bos
         self.append_eos = append_eos
 
-        self.bos_idx = tokens[bos_token]
-        self.eos_idx = tokens[eos_token]
+        if prepend_bos:
+            self.bos_token: Optional[str] = bos_token
+            self.bos_idx = tokens[bos_token]
+        else:
+            self.bos_token = None
+            self.bos_idx = -1
+        if append_eos:
+            self.eos_token: Optional[str] = eos_token
+            self.eos_idx = tokens[eos_token]
+        else:
+            self.eos_token = None
+            self.eos_idx = -1
+
+        self.tokens_to_idx = tokens
+        self.tokens = list(tokens.keys())
+        self.unk_token = unk_token
+        self.mask_token = mask_token
+        self.pad_token = pad_token
+
         self.pad_idx = tokens[pad_token]
 
         self.allow_unknown = unk_token is not None

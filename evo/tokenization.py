@@ -140,6 +140,7 @@ class Vocab(object):
         return indices
 
     def decode_single_sequence(self, array: np.ndarray) -> str:
+        array = array[int(self.prepend_bos):len(array) - int(self.append_eos)]
         return "".join(self.token(idx) for idx in array)
 
     def encode(self, inputs: Union[str, Sequence[str], np.ndarray, MSA]) -> np.ndarray:

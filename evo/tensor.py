@@ -1,8 +1,9 @@
-from typing import Sequence, TypeVar, Callable
+from typing import Sequence, TypeVar, Callable, Generator, Optional
 import functools
 import torch
 import numpy as np
 import contextlib
+from tqdm.auto import trange
 
 
 TensorLike = TypeVar("TensorLike", np.ndarray, torch.Tensor)
@@ -108,3 +109,17 @@ def recursive_make_numpy(item):
         return {kw: recursive_make_numpy(arg) for kw, arg in item.items()}
     else:
         return item
+
+
+def batched_iterator(
+    data: torch.Tensor,
+    batch_size: int,
+    verbose: bool = True,
+    device: Optional[torch.device] = None,
+) -> Generator[torch.Tensor, None, None]:
+    num_examples = data.size(0)
+    for start in trange(0, num_examples, batch_size):
+        batch = data[start : start + batch_size]
+        if device is not None:
+            batch = batch.to(device)
+        yield batch

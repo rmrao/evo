@@ -209,6 +209,12 @@ class Vocab(object):
             append_eos=tokenizer.sep_token is not None,
         )
 
+    @classmethod
+    def from_fasta_standard(cls) -> "Vocab":
+        alphabet = "ARNDCQEGHILKMFPSTWYV-"
+        a2n = {a: n for n, a in enumerate(alphabet)}
+        return cls(a2n, pad_token="-", prepend_bos=False, append_eos=False)
+
 
 def test_encode_sequence():
     sequence = "LFKLGAENIFLGRKAATKEEAIRFAGEQLVKGGYVEPEYVQAMLDREKLTPTYLGESIAVPHGTVEAK"

@@ -257,7 +257,7 @@ class MSA:
         filename = Path(alnfile)
         if filename.suffix == ".sto":
             return cls.from_stockholm(filename, keep_insertions, **kwargs)
-        elif filename.suffix in (".fas", ".fasta", ".a3m"):
+        elif filename.suffix in (".fas", ".fasta", ".a3m", ".a2m"):
             return cls.from_fasta(filename, keep_insertions, **kwargs)
         else:
             raise ValueError(f"Unknown file format {filename.suffix}")

@@ -186,7 +186,8 @@ class MSA:
     @property
     def coverage(self) -> float:
         if not hasattr(self, "_coverage"):
-            self._coverage = self.is_covered.mean()
+            notgap = self.array != self.gap
+            self._coverage = notgap.mean(0)
         return self._coverage
 
     @property
@@ -233,13 +234,19 @@ class MSA:
         fasfile: Union[PathLike, TextIO],
         keep_insertions: bool = False,
         uppercase: bool = False,
+        remove_lowercase_cols: bool = False,
         **kwargs,
     ) -> "MSA":
 
         output = []
+        valid_indices = None
         for record in SeqIO.parse(fasfile, "fasta"):
             description = record.description
             sequence = str(record.seq)
+            if remove_lowercase_cols:
+                if valid_indices is None:
+                    valid_indices = [i for i, aa in enumerate(sequence) if aa.isupper()]
+                sequence = "".join(sequence[i] for i in valid_indices)
             if not keep_insertions:
                 sequence = re.sub(r"([a-z]|\.|\*)", "", sequence)
             if uppercase:

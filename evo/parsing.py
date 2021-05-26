@@ -1,10 +1,12 @@
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, Sequence
+from collections import defaultdict
 import string
 from pathlib import Path
 from Bio import SeqIO
 import subprocess
 from .typed import PathLike
 from .constants import IUPAC_CODES
+from .dataset import ThreadsafeFile
 import numpy as np
 
 
@@ -113,3 +115,82 @@ def parse_PDB(x, atoms=["N", "CA", "C"], chain=None):
 
     valid_resn = np.array(sorted(xyz.keys()))
     return np.array(xyz_).reshape(-1, len(atoms), 3), "".join(seq_), valid_resn
+
+
+class UniProtView(Sequence[Dict[str, str]]):
+    def __init__(self, path: PathLike):
+        self.path = Path(path)
+        self.cache = self.path.with_name(self.path.name + ".idx.npy")
+        self.file = ThreadsafeFile(self.path, open)
+        if self.cache.exists():
+            self.offsets = np.load(self.cache)
+        else:
+            self.offsets = self._build_index()
+            self._num_sequences = len(self.offsets)
+            np.save(self.cache, self.offsets)
+
+    def finalize(self, item: Dict[str, List[str]], join: str = ""):
+        deletewhite = str.maketrans(dict.fromkeys(string.whitespace))
+        output = {key: join.join(values) for key, values in item.items()}
+        output["sequence"] = (
+            output["SQ"].split("\n", maxsplit=1)[1].translate(deletewhite)
+        )
+        return output
+
+    def __iter__(self):
+        entry: Dict[str, List[str]] = defaultdict(list)
+
+        with open(self.path) as f:
+            for line in f:
+                if line.startswith("ID"):
+                    if entry:
+                        yield self.finalize(entry)
+                    entry = defaultdict(list)
+                data = line[5:]
+                if line[:5].strip():
+                    tag = line[:5].strip()
+                entry[tag].append(data)
+            yield self.finalize(entry)
+
+    def count_sequences(self):
+        return int(
+            subprocess.run(
+                ["grep", "-c", "^ID", str(self.path)], capture_output=True
+            ).stdout.decode()
+        )
+
+    def _build_index(self):
+        # Use grep and awk to get 100M/s on local SSD.
+        # Should process your enormous 100G fasta in ~10 min single core...
+        bytes_offsets = subprocess.check_output(
+            f"cat {self.path} | tqdm --bytes --total $(wc -c < {self.path})"
+            "| grep --byte-offset '^ID' -o | cut -d: -f1",
+            shell=True,
+        )
+        bytes_np = np.fromstring(bytes_offsets, dtype=np.int64, sep=" ")
+        return bytes_np
+
+    def __getitem__(self, idx):
+        self.file.seek(self.offsets[idx])
+        if idx == len(self) - 1:
+            data = self.file.read()
+        else:
+            data = self.file.read(self.offsets[idx + 1] - self.offsets[idx])
+
+        entry: Dict[str, List[str]] = defaultdict(list)
+        for line in data.split("\n"):
+            data = line[5:]
+            if line[:5].strip():
+                tag = line[:5].strip()
+            entry[tag].append(data)
+
+        return self.finalize(entry, join="\n")
+
+    def __len__(self):
+        if not hasattr(self, "_num_sequences"):
+            self._num_sequences = self.count_sequences()
+        return self._num_sequences
+
+
+def parse_uniprot(path: PathLike) -> Sequence[Dict[str, str]]:
+    return UniProtView(path)

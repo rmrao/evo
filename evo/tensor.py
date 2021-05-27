@@ -118,7 +118,8 @@ def batched_iterator(
     device: Optional[torch.device] = None,
 ) -> Generator[torch.Tensor, None, None]:
     num_examples = data.size(0)
-    for start in trange(0, num_examples, batch_size):
+    iterator = trange if verbose else range
+    for start in iterator(0, num_examples, batch_size):
         batch = data[start : start + batch_size]
         if device is not None:
             batch = batch.to(device)

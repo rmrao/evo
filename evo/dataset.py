@@ -21,7 +21,7 @@ import subprocess
 from tqdm import tqdm
 from Bio import SeqIO
 import numba
-from .tensor import collate_tensors
+from .tensor import collate_tensors, numpy_seed
 from .typed import PathLike
 from .align import MSA
 from .tokenization import Vocab
@@ -110,6 +110,33 @@ class BaseWrapperDataset(CollatableVocabDataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+class SubsetDataset(BaseWrapperDataset):
+    def __init__(
+        self,
+        dataset: CollatableVocabDataset,
+        subset: Sequence[float],
+        index: int,
+        seed: int = 0,
+    ):
+        super().__init__(dataset)
+        fracs = np.array(subset)
+        assert np.isclose(fracs.sum(), 1)
+        percentages = np.append(0, np.cumsum(fracs))
+        percentages[-1] = 1
+        with numpy_seed(seed):
+            indices = np.permutation(np.arange(len(dataset)))  # type: ignore
+            start, end = percentages[index : index + 2] * len(dataset)  # type: ignore
+            indices = np.sort(indices[start:end])
+        self._indices = indices
+
+    def __len__(self):
+        return len(self._indices)
+
+    def __getitem__(self, index: int):
+        index = self._indices[index]
+        return super().__getitem__(index)
 
 
 class NPZDataset(torch.utils.data.Dataset):
@@ -317,7 +344,7 @@ class TorchDataset(CollatableVocabDataset):
         return len(self.offsets)
 
     def __getitem__(self, idx):
-        item = self.data[self.offsets[idx]:self.offsets[idx] + self.sizes[idx]]
+        item = self.data[self.offsets[idx] : self.offsets[idx] + self.sizes[idx]]
         return item
 
     def collater(self, batch):
@@ -489,11 +516,11 @@ class BatchBySequenceLength(torch.utils.data.Sampler):
             indices = list(range(len(self.batches)))
 
         # add extra samples to make it evenly divisible
-        indices += indices[:(self.total_size - len(indices))]
+        indices += indices[: (self.total_size - len(indices))]
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank:self.total_size:self.num_replicas]
+        indices = indices[self.rank : self.total_size : self.num_replicas]
         assert len(indices) == len(self)
         yield from (self.batches[idx] for idx in indices)
 

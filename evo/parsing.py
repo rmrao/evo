@@ -8,6 +8,7 @@ from .typed import PathLike
 from .constants import IUPAC_CODES
 from .dataset import ThreadsafeFile
 import numpy as np
+from scipy.spatial.distance import squareform, pdist
 
 
 def read_sequences(
@@ -92,7 +93,6 @@ def parse_PDB(x, atoms=["N", "CA", "C"], chain=None):
 
                 if atom not in xyz[resn][resa]:
                     xyz[resn][resa][atom] = np.array([x, y, z])
-                breakpoint()
 
     # convert to numpy arrays, fill in missing values
     seq_, xyz_ = [], []
@@ -115,6 +115,36 @@ def parse_PDB(x, atoms=["N", "CA", "C"], chain=None):
 
     valid_resn = np.array(sorted(xyz.keys()))
     return np.array(xyz_).reshape(-1, len(atoms), 3), "".join(seq_), valid_resn
+
+
+def extend(a, b, c, L, A, D):
+    """
+    input:  3 coords (a,b,c), (L)ength, (A)ngle, and (D)ihedral
+    output: 4th coord
+    """
+
+    def normalize(x):
+        return x / np.linalg.norm(x, ord=2, axis=-1, keepdims=True)
+
+    bc = normalize(b - c)
+    n = normalize(np.cross(b - a, bc))
+    m = [bc, np.cross(n, bc), n]
+    d = [L * np.cos(A), L * np.sin(A) * np.cos(D), -L * np.sin(A) * np.sin(D)]
+    return c + sum([m * d for m, d in zip(m, d)])
+
+
+def contacts_from_pdb(
+    filename: PathLike, distance_threshold: float = 8.0
+) -> np.ndarray:
+    coords, _, _ = parse_PDB(filename)
+
+    N = coords[:, 0]
+    CA = coords[:, 1]
+    C = coords[:, 2]
+
+    Cbeta = extend(C, N, CA, 1.522, 1.927, -2.143)
+    distogram = squareform(pdist(Cbeta))
+    return distogram < distance_threshold
 
 
 class UniProtView(Sequence[Dict[str, str]]):

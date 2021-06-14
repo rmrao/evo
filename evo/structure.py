@@ -62,7 +62,7 @@ class AtomLine(NamedTuple):
 
 class Structure(object):
     def __init__(self, sequence: str, coords: np.ndarray, residues: np.array):
-        assert len(sequence) == coords.shape[0] == residues.shape[0]
+        assert len(sequence) == coords.shape[0]
         assert coords.ndim == 3
         assert residues.ndim == 1
 
@@ -184,4 +184,4 @@ class Structure(object):
 
         valid_resn = np.array(sorted(residues.keys()))
 
-        return Structure(seq_string, coords, valid_resn)
+        return Structure(seq_string, coords, valid_resn - 1)

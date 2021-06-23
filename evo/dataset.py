@@ -108,6 +108,9 @@ class BaseWrapperDataset(CollatableVocabDataset):
     def __getitem__(self, index: int):
         return self.dataset[index]
 
+    def collater(self, batch):
+        return self.dataset.collater(batch)
+
     def __len__(self):
         return len(self.dataset)
 
@@ -126,10 +129,13 @@ class SubsetDataset(BaseWrapperDataset):
         percentages = np.append(0, np.cumsum(fracs))
         percentages[-1] = 1
         with numpy_seed(seed):
-            indices = np.permutation(np.arange(len(dataset)))  # type: ignore
-            start, end = percentages[index : index + 2] * len(dataset)  # type: ignore
+            indices = np.random.permutation(np.arange(len(dataset)))  # type: ignore
+            start, end = (
+                percentages[index : index + 2] * len(dataset)  # type: ignore
+            ).astype(np.int64)
             indices = np.sort(indices[start:end])
         self._indices = indices
+        self.sizes = dataset.sizes[indices]  # type: ignore
 
     def __len__(self):
         return len(self._indices)

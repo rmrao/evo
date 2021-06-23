@@ -7,6 +7,7 @@ import esm
 from copy import copy
 import logging
 from .align import MSA
+import itertools
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class Vocab(object):
         )
         self.numpy_indices = np.array(
             [self.index(chr(tok)) for tok in self.uint8_symbols],
-            dtype=np.long,
+            dtype=np.int64,
         )
 
     def index(self, token: str) -> int:
@@ -106,6 +107,10 @@ class Vocab(object):
     def _convert_uint8_array(self, array: np.ndarray) -> np.ndarray:
         assert array.dtype in (np.dtype("S1"), np.uint8)
         array = array.view(np.uint8)
+        mask = ~np.isin(array, self.uint8_symbols)
+        if mask.any():
+            array = array.copy()
+            array[mask] = ord(self.unk_token)  # type: ignore
         locs = np.digitize(array, self.uint8_symbols, right=True)
         indices = self.numpy_indices[locs.reshape(-1)].reshape(locs.shape)
         return indices
@@ -140,20 +145,38 @@ class Vocab(object):
         return indices
 
     def decode_single_sequence(self, array: np.ndarray) -> str:
-        array = array[int(self.prepend_bos):len(array) - int(self.append_eos)]
+        array = array[int(self.prepend_bos) : len(array) - int(self.append_eos)]
         return "".join(self.token(idx) for idx in array)
 
-    def encode(self, inputs: Union[str, Sequence[str], np.ndarray, MSA]) -> np.ndarray:
+    def encode(
+        self, inputs: Union[str, Sequence[str], np.ndarray, MSA], validate: bool = True
+    ) -> np.ndarray:
+        if validate and not self.check_valid(inputs):
+            raise ValueError("Invalid tokens in input")
         if isinstance(inputs, str):
             return self.encode_single_sequence(inputs)
         elif isinstance(inputs, Sequence):
             return self.encode_batched_sequences(inputs)
         elif isinstance(inputs, np.ndarray):
             return self.encode_array(inputs)
-        elif isinstance(inputs, MSA):
+        elif isinstance(inputs, MSA) or hasattr(inputs, "array"):
             return self.encode_array(inputs.array)
         else:
             raise TypeError(f"Unknown input type {type(inputs)}")
+
+    def check_valid(self, inputs: Union[str, Sequence[str], np.ndarray, MSA]) -> bool:
+        if isinstance(inputs, str):
+            tokens = set(inputs)
+        elif isinstance(inputs, Sequence):
+            tokens = set(itertools.chain.from_iterable(inputs))
+        elif isinstance(inputs, np.ndarray):
+            inputs = inputs.astype(np.dtype("S1"))
+            tokens = {x.decode() for x in inputs.flatten()}
+        elif isinstance(inputs, MSA) or hasattr(inputs, "sequences"):
+            tokens = set(itertools.chain.from_iterable(inputs.sequences))
+        else:
+            raise TypeError(f"Unknown input type {type(inputs)}")
+        return not bool(tokens - set(self.tokens))
 
     def decode(
         self, tokens: Union[np.ndarray, torch.Tensor]
@@ -222,9 +245,19 @@ class Vocab(object):
 
     @classmethod
     def from_fasta_standard(cls) -> "Vocab":
+        alphabet = "ARNDCQEGHILKMFPSTWYV-X"
+        a2n = {a: n for n, a in enumerate(alphabet)}
+        return cls(
+            a2n, pad_token="-", prepend_bos=False, append_eos=False, unk_token="X"
+        )
+
+    @classmethod
+    def from_trrosetta(cls) -> "Vocab":
         alphabet = "ARNDCQEGHILKMFPSTWYV-"
         a2n = {a: n for n, a in enumerate(alphabet)}
-        return cls(a2n, pad_token="-", prepend_bos=False, append_eos=False)
+        return cls(
+            a2n, pad_token="-", prepend_bos=False, append_eos=False, unk_token="-"
+        )
 
 
 def test_encode_sequence():

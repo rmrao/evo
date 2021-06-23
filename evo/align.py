@@ -87,6 +87,13 @@ class MSA:
                 indices = [int(line[1:].strip()) for line in f if line.startswith(">")]
             return self.select(indices, axis="seqs")
 
+    def replace_(self, inp: str, rep: str) -> "MSA":
+        dtype = self.dtype
+        self.dtype = np.dtype("S1")  # type: ignore
+        self.array[self.array == inp.encode()] = rep.encode()
+        self.dtype = dtype
+        return self
+
     @property
     def gap(self) -> Union[bytes, int]:
         return b"-" if self.dtype == np.dtype("S1") else ord("-")

@@ -133,18 +133,32 @@ class MSA:
         self.dtype = dtype
         return self.select(indices, axis="seqs")
 
-    def select_diverse(self, num_seqs: int, method: str = "best") -> "MSA":
-        assert method in ("fast", "best")
+    def sample_weights(self, num_seqs: int) -> "MSA":
+        if self.depth <= num_seqs:
+            return self
+        weights = self.weights[1:]
+        weights = weights / weights.sum()
+        indices = (
+            np.random.choice(
+                self.depth - 1, size=num_seqs - 1, replace=False, p=weights
+            )
+            + 1
+        )
+        indices = np.sort(indices)
+        indices = np.append(0, indices)
+        return self.select(indices, axis="seqs")
+
+    def select_diverse(self, num_seqs: int, method: str = "hhfilter") -> "MSA":
+        assert method in ("hhfilter", "sample-weights")
         if num_seqs >= self.depth:
             return self
 
-        msa = self.hhfilter(diff=num_seqs)
-        if num_seqs >= msa.depth:
-            return msa
-        elif method == "fast":
-            msa = msa.select(np.arange(num_seqs))
+        if method == "hhfilter":
+            msa = self.hhfilter(diff=num_seqs)
+            if num_seqs < msa.depth:
+                msa = msa.select(np.arange(num_seqs))
         else:
-            msa = msa.greedy_select(num_seqs, mode="max")
+            msa = self.sample_weights(num_seqs)
         return msa
 
     @property

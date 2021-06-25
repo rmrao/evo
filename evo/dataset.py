@@ -217,9 +217,9 @@ class A3MDataset(torch.utils.data.Dataset):
         data_file: PathLike,
         split_files: Optional[Collection[str]] = None,
         max_seqs_per_msa: Optional[int] = None,
-        sample_method: str = "fast",
+        sample_method: str = "hhfilter",
     ):
-        assert sample_method in ("fast", "best")
+        assert sample_method in ("hhfilter", "sample-weights")
         data_file = Path(data_file)
         if not data_file.exists():
             raise FileNotFoundError(data_file)
@@ -269,6 +269,27 @@ class A3MDataset(torch.utils.data.Dataset):
                     self._max_seqs_per_msa, method=self._sample_method
                 )
             return msa
+
+
+class EncodedA3MDataset(CollatableVocabDataset, A3MDataset):
+    def __init__(
+        self,
+        data_file: PathLike,
+        vocab: Vocab,
+        split_files: Optional[Collection[str]] = None,
+        max_seqs_per_msa: Optional[int] = None,
+        sample_method: str = "hhfilter",
+    ):
+        super().__init__(
+            data_file=data_file,
+            vocab=vocab,
+            split_files=split_files,
+            max_seqs_per_msa=max_seqs_per_msa,
+            sample_method=sample_method,
+        )
+
+    def __getitem__(self, idx):
+        return self.vocab.encode(super().__getitem__(idx))
 
 
 class FastaDataset(SizedDataset):

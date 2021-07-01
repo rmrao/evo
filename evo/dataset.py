@@ -90,6 +90,9 @@ class CollatableVocabDataset(CollatableDataset):
         super().__init__(*args, **kwargs)  # type: ignore
         self.vocab = vocab
 
+    def collater(self, batch: List[Any]) -> Any:
+        return collate_tensors(batch, constnat_value=self.vocab.pad_idx)
+
 
 class BaseWrapperDataset(CollatableVocabDataset):
     """BaseWrapperDataset. Wraps an existing dataset.
@@ -103,6 +106,8 @@ class BaseWrapperDataset(CollatableVocabDataset):
         self.dataset = dataset
 
     def __getattr__(self, name: str):
+        if "dataset" not in self.__dict__:
+            raise AttributeError("No dataset")
         return getattr(self.dataset, name)
 
     def __getitem__(self, index: int):

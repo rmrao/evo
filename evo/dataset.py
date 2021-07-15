@@ -91,7 +91,7 @@ class CollatableVocabDataset(CollatableDataset):
         self.vocab = vocab
 
     def collater(self, batch: List[Any]) -> Any:
-        return collate_tensors(batch, constnat_value=self.vocab.pad_idx)
+        return collate_tensors(batch, constant_value=self.vocab.pad_idx)
 
 
 class BaseWrapperDataset(CollatableVocabDataset):

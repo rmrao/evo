@@ -15,7 +15,7 @@ def read_sequences(
     filename: PathLike,
     remove_insertions: bool = False,
     remove_gaps: bool = False,
-) -> List[Tuple[str, str]]:
+) -> Tuple[List[str], List[str]]:
 
     filename = Path(filename)
     if filename.suffix == ".sto":
@@ -43,7 +43,12 @@ def read_sequences(
         sequence = str(record.seq).translate(translation)
         return description, sequence
 
-    return [process_record(rec) for rec in SeqIO.parse(str(filename), form)]
+    headers = []
+    sequences = []
+    for header, seq in map(process_record, SeqIO.parse(str(filename), form)):
+        headers.append(header)
+        sequences.append(seq)
+    return headers, sequences
 
 
 def count_sequences(seqfile: PathLike) -> int:

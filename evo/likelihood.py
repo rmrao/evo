@@ -16,6 +16,7 @@ def sequence_logits(
     vocab: Vocab,
     sequence: str,
     verbose: bool = False,
+    max_tokens: int = 2 ** 14,
 ) -> torch.Tensor:
 
     device = next(model.parameters()).device
@@ -27,7 +28,7 @@ def sequence_logits(
     tokens[torch.arange(end - start), torch.arange(start, end)] = vocab.mask_idx
 
     logits = torch.zeros((end - start, len(vocab)), device=device)
-    batch_size = 2 ** 14 // tokens.size(-1)
+    batch_size = max_tokens // tokens.size(-1)
     for i, batch in enumerate(
         batched_iterator(tokens, batch_size=batch_size, device=device, verbose=verbose)
     ):
@@ -46,6 +47,8 @@ def sequence_pseudo_ppl(
     model: esm.model.ProteinBertModel,
     vocab: Vocab,
     sequence: str,
+    verbose: bool = False,
+    max_tokens: int = 2 ** 14,
 ) -> float:
 
     device = next(model.parameters()).device
@@ -54,7 +57,9 @@ def sequence_pseudo_ppl(
     end = tokens.size(-1) - int(vocab.append_eos)
     residue_tokens = tokens[start:end]
 
-    logits = sequence_logits(model, vocab, sequence)
+    logits = sequence_logits(
+        model, vocab, sequence, verbose=verbose, max_tokens=max_tokens
+    )
 
     pseudo_ppl = nn.CrossEntropyLoss()(
         logits.view(-1, len(vocab)), residue_tokens
@@ -67,6 +72,7 @@ def pseudo_ppl(
     model: esm.model.ProteinBertModel,
     alphabet_or_vocab: Union[esm.data.Alphabet, Vocab],
     sequences: List[str],
+    max_tokens: int = 2 ** 14,
 ):
     if not isinstance(alphabet_or_vocab, Vocab):
         vocab = Vocab.from_esm_alphabet(alphabet_or_vocab)
@@ -75,7 +81,7 @@ def pseudo_ppl(
 
     model = model.cuda().eval()
 
-    compute = partial(sequence_pseudo_ppl, model, vocab)
+    compute = partial(sequence_pseudo_ppl, model, vocab, max_tokens=max_tokens)
 
     pseudo_ppl = []
     for sequence in tqdm(sequences):

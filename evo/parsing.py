@@ -9,6 +9,7 @@ from .constants import IUPAC_CODES
 from .dataset import ThreadsafeFile
 import numpy as np
 from scipy.spatial.distance import squareform, pdist
+import pandas as pd
 
 
 def read_sequences(
@@ -229,3 +230,25 @@ class UniProtView(Sequence[Dict[str, str]]):
 
 def parse_uniprot(path: PathLike) -> Sequence[Dict[str, str]]:
     return UniProtView(path)
+
+
+def parse_simple_pdb(path: PathLike) -> pd.DataFrame:
+    names = [
+        "record",
+        "atomno",
+        "atom",
+        "resn",
+        "chain",
+        "resi",
+        "x",
+        "y",
+        "z",
+        "occupancy",
+        "plddt",
+        "element",
+    ]
+    df = pd.read_csv(path, sep=r"\s+", names=names)
+    df = df[df["record"] == "ATOM"].reset_index().drop("index", axis="columns")
+    df["atomno"] = df["atomno"].astype(int)
+    df["resi"] = df["resi"].astype(int)
+    return df

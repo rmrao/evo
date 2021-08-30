@@ -189,12 +189,15 @@ class NPZDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .npz files found in {data_file}")
 
         self._file_list = sorted(file_list)
-        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
+        self.keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._lazy = lazy
 
     def get(self, key: str):
-        index = self._keys[key]
+        index = self.keys[key]
         return self[index]
+
+    def key(self, index: int) -> str:
+        return self._file_list[index].stem
 
     def __len__(self) -> int:
         return len(self._file_list)
@@ -250,13 +253,16 @@ class A3MDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .a3m files found in {data_file}")
 
         self._file_list = sorted(file_list)
-        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
+        self.keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._max_seqs_per_msa = max_seqs_per_msa
         self._sample_method = sample_method
 
     def get(self, key: str):
-        index = self._keys[key]
+        index = self.keys[key]
         return self[index]
+
+    def key(self, index: int) -> str:
+        return self._file_list[index].stem
 
     def __len__(self) -> int:
         return len(self._file_list)

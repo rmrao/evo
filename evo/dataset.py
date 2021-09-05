@@ -331,6 +331,9 @@ class FastaDataset(SizedDataset):
         super().__init__(sizes)
 
     def __getitem__(self, idx):
+        return self.get(idx)
+
+    def get(self, idx: int):
         self.file.seek(self.offsets[idx])
         if idx == len(self) - 1:
             data = self.file.read()

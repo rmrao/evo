@@ -52,7 +52,7 @@ def read_sequences(
     return headers, sequences
 
 
-def read_first_sequences(
+def read_first_sequence(
     filename: PathLike,
     remove_insertions: bool = False,
     remove_gaps: bool = False,

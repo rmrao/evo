@@ -1,4 +1,5 @@
 from typing import List, Tuple, Union, Iterator, Sequence, TextIO
+from copy import copy
 import contextlib
 import math
 import tempfile
@@ -42,6 +43,14 @@ class MSA:
                 (header, "".join(seq[idx] for idx in indices)) for header, seq in self
             ]
             return self.__class__(data)
+
+    def swap(self, index1: int, index2: int) -> "MSA":
+        headers = copy(self.headers)
+        sequences = copy(self.sequences)
+        headers[index1], headers[index2] = headers[index2], headers[index1]
+        sequences[index1], sequences[index2] = sequences[index2], sequences[index1]
+        data = list(zip(headers, sequences))
+        return self.__class__(data, seqid_cutoff=self.seqid_cutoff)
 
     def filter_coverage(self, threshold: float, axis: str = "seqs") -> "MSA":
         assert 0 <= threshold <= 1
@@ -292,7 +301,7 @@ class MSA:
 
     def write(self, outfile: PathLike, form: str = "fasta") -> None:
         SeqIO.write(
-            (SeqIO.SeqRecord(Seq(seq), description=header) for header, seq in self),
+            (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self),
             outfile,
             form,
         )

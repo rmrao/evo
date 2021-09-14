@@ -10,6 +10,7 @@ from scipy.spatial.distance import squareform, pdist, cdist
 from Bio import SeqIO
 from Bio.Seq import Seq
 from .typed import PathLike
+from .tensor import apc
 
 
 class MSA:
@@ -23,11 +24,15 @@ class MSA:
         self.headers = [header for header, _ in sequences]
         self.sequences = [seq for _, seq in sequences]
         self._seqlen = len(self.sequences[0])
-        self._depth = len(self.sequences)
-        self.seqid_cutoff = seqid_cutoff
         assert all(
             len(seq) == self._seqlen for seq in self.sequences
         ), "Seqlen Mismatch!"
+
+        self._depth = len(self.sequences)
+        self.seqid_cutoff = seqid_cutoff
+        self.is_nucleotide = all(
+            re.match(r"(A|C|T|G|U|-)*", seq) for seq in self.sequences
+        )
 
     def __iter__(self) -> Iterator[Tuple[str, str]]:
         return zip(self.headers, self.sequences)
@@ -140,6 +145,22 @@ class MSA:
             msa = msa.greedy_select(num_seqs, mode="max")
         return msa
 
+    def invcov(self) -> np.ndarray:
+        """given one-hot encoded MSA, return contacts"""
+        from sklearn.preprocessing import OneHotEncoder
+        dtype = self.dtype
+        self.dtype = np.uint8
+        Y = OneHotEncoder(drop=[self.gap]).fit_transform(self.array.reshape(-1, 1)).toarray().reshape(self.depth, self.seqlen, -1)
+        K = Y.shape[-1]
+        Y_flat = Y.reshape(self.depth, -1)
+        c = np.cov(Y_flat.T)
+        self.dtype = dtype
+        return np.linalg.norm(c.reshape(self.seqlen, K, self.seqlen, K), ord=2, axis=(1, 3))
+        # shrink = 4.5 / math.sqrt(self.depth) * np.eye(c.shape[0])
+        # ic = np.linalg.inv(c + shrink)
+        # ic = ic.reshape(self.seqlen, K, self.seqlen, K)
+        # return apc(np.sqrt(np.square(ic).sum((1, 3))))
+
     @property
     def array(self) -> np.ndarray:
         if not hasattr(self, "_array"):
@@ -195,6 +216,10 @@ class MSA:
         if not hasattr(self, "_weights"):
             self._weights = 1 / (self.pdist() < self.seqid_cutoff).sum(1)
         return self._weights
+
+    @property
+    def is_protein(self) -> bool:
+        return not self.is_nucleotide
 
     def neff(self, normalization: Union[float, str] = "none") -> float:
         if isinstance(normalization, str):
@@ -268,6 +293,10 @@ class MSA:
             return cls.from_fasta(filename, keep_insertions, **kwargs)
         else:
             raise ValueError(f"Unknown file format {filename.suffix}")
+
+    @classmethod
+    def from_sequences(cls, sequences: Sequence[str]) -> "MSA":
+        return cls([("", seq) for seq in sequences])
 
     def write(self, outfile: PathLike, form: str = "fasta") -> None:
         SeqIO.write(

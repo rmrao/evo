@@ -1,4 +1,5 @@
 from typing import List, Tuple, Union, Iterator, Sequence, TextIO
+from copy import copy
 import contextlib
 import math
 import tempfile
@@ -48,6 +49,14 @@ class MSA:
             ]
             return self.__class__(data)
 
+    def swap(self, index1: int, index2: int) -> "MSA":
+        headers = copy(self.headers)
+        sequences = copy(self.sequences)
+        headers[index1], headers[index2] = headers[index2], headers[index1]
+        sequences[index1], sequences[index2] = sequences[index2], sequences[index1]
+        data = list(zip(headers, sequences))
+        return self.__class__(data, seqid_cutoff=self.seqid_cutoff)
+
     def filter_coverage(self, threshold: float, axis: str = "seqs") -> "MSA":
         assert 0 <= threshold <= 1
         assert axis in ("seqs", "positions")
@@ -92,6 +101,13 @@ class MSA:
                 indices = [int(line[1:].strip()) for line in f if line.startswith(">")]
             return self.select(indices, axis="seqs")
 
+    def replace_(self, inp: str, rep: str) -> "MSA":
+        dtype = self.dtype
+        self.dtype = np.dtype("S1")  # type: ignore
+        self.array[self.array == inp.encode()] = rep.encode()
+        self.dtype = dtype
+        return self
+
     @property
     def gap(self) -> Union[bytes, int]:
         return b"-" if self.dtype == np.dtype("S1") else ord("-")
@@ -131,18 +147,32 @@ class MSA:
         self.dtype = dtype
         return self.select(indices, axis="seqs")
 
-    def select_diverse(self, num_seqs: int, method: str = "best") -> "MSA":
-        assert method in ("fast", "best")
+    def sample_weights(self, num_seqs: int) -> "MSA":
+        if self.depth <= num_seqs:
+            return self
+        weights = self.weights[1:]
+        weights = weights / weights.sum()
+        indices = (
+            np.random.choice(
+                self.depth - 1, size=num_seqs - 1, replace=False, p=weights
+            )
+            + 1
+        )
+        indices = np.sort(indices)
+        indices = np.append(0, indices)
+        return self.select(indices, axis="seqs")
+
+    def select_diverse(self, num_seqs: int, method: str = "hhfilter") -> "MSA":
+        assert method in ("hhfilter", "sample-weights")
         if num_seqs >= self.depth:
             return self
 
-        msa = self.hhfilter(diff=num_seqs)
-        if num_seqs >= msa.depth:
-            return msa
-        elif method == "fast":
-            msa = msa.select(np.arange(num_seqs))
+        if method == "hhfilter":
+            msa = self.hhfilter(diff=num_seqs)
+            if num_seqs < msa.depth:
+                msa = msa.select(np.arange(num_seqs))
         else:
-            msa = msa.greedy_select(num_seqs, mode="max")
+            msa = self.sample_weights(num_seqs)
         return msa
 
     def invcov(self) -> np.ndarray:
@@ -300,7 +330,7 @@ class MSA:
 
     def write(self, outfile: PathLike, form: str = "fasta") -> None:
         SeqIO.write(
-            (SeqIO.SeqRecord(Seq(seq), description=header) for header, seq in self),
+            (SeqIO.SeqRecord(Seq(seq), id=header, description="") for header, seq in self),
             outfile,
             form,
         )

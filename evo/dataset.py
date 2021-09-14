@@ -21,7 +21,7 @@ import subprocess
 from tqdm import tqdm
 from Bio import SeqIO
 import numba
-from .tensor import collate_tensors
+from .tensor import collate_tensors, numpy_seed
 from .typed import PathLike
 from .align import MSA
 from .tokenization import Vocab
@@ -90,6 +90,9 @@ class CollatableVocabDataset(CollatableDataset):
         super().__init__(*args, **kwargs)  # type: ignore
         self.vocab = vocab
 
+    def collater(self, batch: List[Any]) -> Any:
+        return collate_tensors(batch, constant_value=self.vocab.pad_idx)
+
 
 class BaseWrapperDataset(CollatableVocabDataset):
     """BaseWrapperDataset. Wraps an existing dataset.
@@ -103,13 +106,48 @@ class BaseWrapperDataset(CollatableVocabDataset):
         self.dataset = dataset
 
     def __getattr__(self, name: str):
+        if "dataset" not in self.__dict__:
+            raise AttributeError("No dataset")
         return getattr(self.dataset, name)
 
     def __getitem__(self, index: int):
         return self.dataset[index]
 
+    def collater(self, batch):
+        return self.dataset.collater(batch)
+
     def __len__(self):
         return len(self.dataset)
+
+
+class SubsetDataset(BaseWrapperDataset):
+    def __init__(
+        self,
+        dataset: CollatableVocabDataset,
+        subset: Sequence[float],
+        index: int,
+        seed: int = 0,
+    ):
+        super().__init__(dataset)
+        fracs = np.array(subset)
+        assert np.isclose(fracs.sum(), 1)
+        percentages = np.append(0, np.cumsum(fracs))
+        percentages[-1] = 1
+        with numpy_seed(seed):
+            indices = np.random.permutation(np.arange(len(dataset)))  # type: ignore
+            start, end = (
+                percentages[index : index + 2] * len(dataset)  # type: ignore
+            ).astype(np.int64)
+            indices = np.sort(indices[start:end])
+        self._indices = indices
+        self.sizes = dataset.sizes[indices]  # type: ignore
+
+    def __len__(self):
+        return len(self._indices)
+
+    def __getitem__(self, index: int):
+        index = self._indices[index]
+        return super().__getitem__(index)
 
 
 class NPZDataset(torch.utils.data.Dataset):
@@ -151,12 +189,15 @@ class NPZDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .npz files found in {data_file}")
 
         self._file_list = sorted(file_list)
-        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
+        self.keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._lazy = lazy
 
     def get(self, key: str):
-        index = self._keys[key]
+        index = self.keys[key]
         return self[index]
+
+    def key(self, index: int) -> str:
+        return self._file_list[index].stem
 
     def __len__(self) -> int:
         return len(self._file_list)
@@ -184,9 +225,9 @@ class A3MDataset(torch.utils.data.Dataset):
         data_file: PathLike,
         split_files: Optional[Collection[str]] = None,
         max_seqs_per_msa: Optional[int] = None,
-        sample_method: str = "fast",
+        sample_method: str = "hhfilter",
     ):
-        assert sample_method in ("fast", "best")
+        assert sample_method in ("hhfilter", "sample-weights")
         data_file = Path(data_file)
         if not data_file.exists():
             raise FileNotFoundError(data_file)
@@ -212,13 +253,16 @@ class A3MDataset(torch.utils.data.Dataset):
             raise FileNotFoundError(f"No .a3m files found in {data_file}")
 
         self._file_list = sorted(file_list)
-        self._keys = {f.stem: i for i, f in enumerate(self._file_list)}
+        self.keys = {f.stem: i for i, f in enumerate(self._file_list)}
         self._max_seqs_per_msa = max_seqs_per_msa
         self._sample_method = sample_method
 
     def get(self, key: str):
-        index = self._keys[key]
+        index = self.keys[key]
         return self[index]
+
+    def key(self, index: int) -> str:
+        return self._file_list[index].stem
 
     def __len__(self) -> int:
         return len(self._file_list)
@@ -236,6 +280,27 @@ class A3MDataset(torch.utils.data.Dataset):
                     self._max_seqs_per_msa, method=self._sample_method
                 )
             return msa
+
+
+class EncodedA3MDataset(CollatableVocabDataset, A3MDataset):
+    def __init__(
+        self,
+        data_file: PathLike,
+        vocab: Vocab,
+        split_files: Optional[Collection[str]] = None,
+        max_seqs_per_msa: Optional[int] = None,
+        sample_method: str = "hhfilter",
+    ):
+        super().__init__(
+            data_file=data_file,
+            vocab=vocab,
+            split_files=split_files,
+            max_seqs_per_msa=max_seqs_per_msa,
+            sample_method=sample_method,
+        )
+
+    def __getitem__(self, idx):
+        return self.vocab.encode(super().__getitem__(idx))
 
 
 class FastaDataset(SizedDataset):
@@ -266,6 +331,9 @@ class FastaDataset(SizedDataset):
         super().__init__(sizes)
 
     def __getitem__(self, idx):
+        return self.get(idx)
+
+    def get(self, idx: int):
         self.file.seek(self.offsets[idx])
         if idx == len(self) - 1:
             data = self.file.read()
@@ -317,7 +385,7 @@ class TorchDataset(CollatableVocabDataset):
         return len(self.offsets)
 
     def __getitem__(self, idx):
-        item = self.data[self.offsets[idx]:self.offsets[idx] + self.sizes[idx]]
+        item = self.data[self.offsets[idx] : self.offsets[idx] + self.sizes[idx]]
         return item
 
     def collater(self, batch):
@@ -489,11 +557,11 @@ class BatchBySequenceLength(torch.utils.data.Sampler):
             indices = list(range(len(self.batches)))
 
         # add extra samples to make it evenly divisible
-        indices += indices[:(self.total_size - len(indices))]
+        indices += indices[: (self.total_size - len(indices))]
         assert len(indices) == self.total_size
 
         # subsample
-        indices = indices[self.rank:self.total_size:self.num_replicas]
+        indices = indices[self.rank : self.total_size : self.num_replicas]
         assert len(indices) == len(self)
         yield from (self.batches[idx] for idx in indices)
 

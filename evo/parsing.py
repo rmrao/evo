@@ -9,13 +9,14 @@ from .constants import IUPAC_CODES
 from .dataset import ThreadsafeFile
 import numpy as np
 from scipy.spatial.distance import squareform, pdist
+import pandas as pd
 
 
 def read_sequences(
     filename: PathLike,
     remove_insertions: bool = False,
     remove_gaps: bool = False,
-) -> List[Tuple[str, str]]:
+) -> Tuple[List[str], List[str]]:
 
     filename = Path(filename)
     if filename.suffix == ".sto":
@@ -43,7 +44,47 @@ def read_sequences(
         sequence = str(record.seq).translate(translation)
         return description, sequence
 
-    return [process_record(rec) for rec in SeqIO.parse(str(filename), form)]
+    headers = []
+    sequences = []
+    for header, seq in map(process_record, SeqIO.parse(str(filename), form)):
+        headers.append(header)
+        sequences.append(seq)
+    return headers, sequences
+
+
+def read_first_sequence(
+    filename: PathLike,
+    remove_insertions: bool = False,
+    remove_gaps: bool = False,
+) -> Tuple[str, str]:
+
+    filename = Path(filename)
+    if filename.suffix == ".sto":
+        form = "stockholm"
+    elif filename.suffix in (".fas", ".fasta", ".a3m"):
+        form = "fasta"
+    else:
+        raise ValueError(f"Unknown file format {filename.suffix}")
+
+    translate_dict: Dict[str, Optional[str]] = {}
+    if remove_insertions:
+        translate_dict.update(dict.fromkeys(string.ascii_lowercase))
+    else:
+        translate_dict.update(dict(zip(string.ascii_lowercase, string.ascii_uppercase)))
+
+    if remove_gaps:
+        translate_dict["-"] = None
+
+    translate_dict["."] = None
+    translate_dict["*"] = None
+    translation = str.maketrans(translate_dict)
+
+    def process_record(record: SeqIO.SeqRecord) -> Tuple[str, str]:
+        description = record.description
+        sequence = str(record.seq).translate(translation)
+        return description, sequence
+
+    return process_record(next(SeqIO.parse(str(filename), form)))
 
 
 def count_sequences(seqfile: PathLike) -> int:
@@ -224,3 +265,25 @@ class UniProtView(Sequence[Dict[str, str]]):
 
 def parse_uniprot(path: PathLike) -> Sequence[Dict[str, str]]:
     return UniProtView(path)
+
+
+def parse_simple_pdb(path: PathLike) -> pd.DataFrame:
+    names = [
+        "record",
+        "atomno",
+        "atom",
+        "resn",
+        "chain",
+        "resi",
+        "x",
+        "y",
+        "z",
+        "occupancy",
+        "plddt",
+        "element",
+    ]
+    df = pd.read_csv(path, sep=r"\s+", names=names)
+    df = df[df["record"] == "ATOM"].reset_index().drop("index", axis="columns")
+    df["atomno"] = df["atomno"].astype(int)
+    df["resi"] = df["resi"].astype(int)
+    return df

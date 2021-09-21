@@ -6,7 +6,8 @@ import pandas as pd
 _FASTA_VOCAB = "ARNDCQEGHILKMFPSTWYV"
 
 
-def get_mutants(sequence: str) -> List[str]:
+def single_mutant_names(sequence: str) -> List[str]:
+    """Returns the names of all single mutants of a sequence."""
     mutants = []
     for (i, wt), mut in product(enumerate(sequence), _FASTA_VOCAB):
         if wt == mut:
@@ -16,11 +17,15 @@ def get_mutants(sequence: str) -> List[str]:
     return mutants
 
 
-def mutant_to_names(mutant: str) -> Tuple[str, int, str]:
+def split_mutant_name(mutant: str) -> Tuple[str, int, str]:
+    """Splits a mutant name into the wildtype, position, and mutant."""
     return mutant[0], int(mutant[1:-1]), mutant[-1]
 
 
 def make_mutation(sequence: str, mutant: str, start_ind: int = 1) -> str:
+    """Makes a mutation on a particular sequence. Multiple mutations may be separated
+    by ',', ':', or '+', characters.
+    """
     delimiters = [",", r"\+", ":"]
     expression = re.compile("|".join(delimiters))
     if mutant.upper() == "WT":
@@ -31,12 +36,13 @@ def make_mutation(sequence: str, mutant: str, start_ind: int = 1) -> str:
             sequence = make_mutation(sequence, mutant)
         return sequence
     else:
-        wt, pos, mut = mutant_to_names(mutant)
+        wt, pos, mut = split_mutant_name(mutant)
         assert sequence[pos - start_ind] == wt
         return sequence[:pos - start_ind] + mut + sequence[pos - start_ind + 1:]
 
 
 def create_mutant_df(sequence: str) -> pd.DataFrame:
-    names = ["WT"] + get_mutants(sequence)
+    """Create a dataframe with mutant names and sequences"""
+    names = ["WT"] + single_mutant_names(sequence)
     sequences = [sequence] + [make_mutation(sequence, mut) for mut in names[1:]]
     return pd.DataFrame({"mutant": names, "sequence": sequences})

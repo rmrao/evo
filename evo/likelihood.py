@@ -1,6 +1,7 @@
 from tqdm import tqdm
 import torch
 import torch.nn as nn
+import numpy as np
 import esm
 from typing import Union, List
 from functools import partial
@@ -8,13 +9,14 @@ from functools import partial
 
 from .tokenization import Vocab
 from .tensor import batched_iterator
+from .align import MSA
 
 
 @torch.no_grad()
 def sequence_logits(
     model: esm.model.ProteinBertModel,
     vocab: Vocab,
-    sequence: str,
+    sequence: Union[str, MSA],
     verbose: bool = False,
     mask_positions: bool = True,
     max_tokens: int = 2 ** 14,
@@ -26,26 +28,61 @@ def sequence_logits(
     start = int(vocab.prepend_bos)
     end = tokens.size(-1) - int(vocab.append_eos)
     if mask_positions:
-        tokens = tokens.unsqueeze(0).repeat(end - start, 1)
-        tokens[torch.arange(end - start), torch.arange(start, end)] = vocab.mask_idx
+        repeat_dims = [1] * tokens.dim()
+        tokens = tokens.unsqueeze(0).repeat(end - start, *repeat_dims)
+        if tokens.dim() == 2:
+            tokens[torch.arange(end - start), torch.arange(start, end)] = vocab.mask_idx
+        else:
+            tokens[torch.arange(end - start), 0, torch.arange(start, end)] = vocab.mask_idx
 
         logits = torch.zeros((end - start, len(vocab)), device=device)
-        batch_size = max_tokens // tokens.size(-1)
+        batch_size = max(1, max_tokens // np.prod(tokens.size()[1:]))
         for i, batch in enumerate(
-            batched_iterator(
-                tokens, batch_size=batch_size, device=device, verbose=verbose
-            )
+            batched_iterator(tokens, batch_size=batch_size, device=device, verbose=verbose)
         ):
             idx = i * batch_size
 
             batch_indices = torch.arange(batch.size(0))
-            logits[idx : idx + batch_size] = model(batch)["logits"][
-                batch_indices,
-                batch_indices + start + idx,
-            ]
+            out = model(batch)["logits"]
+            if tokens.dim() == 2:
+                out = out[
+                    batch_indices,
+                    batch_indices + start + idx,
+                ]
+            else:
+                out = out[
+                    batch_indices,
+                    0,
+                    batch_indices + start + idx,
+                ]
+            logits[idx : idx + batch_size] = out
     else:
         logits = model(tokens.unsqueeze(0))["logits"][0, start:end]
     return logits
+
+
+@torch.no_grad()
+def sequence_mutant_scores(
+    model: esm.model.ProteinBertModel,
+    vocab: Vocab,
+    sequence: Union[str, MSA],
+    verbose: bool = False,
+    mask_positions: bool = True,
+    max_tokens: int = 2 ** 14,
+) -> torch.Tensor:
+    print("hello!")
+    logits = sequence_logits(
+        model, vocab, sequence, verbose, mask_positions, max_tokens
+    ).log_softmax(-1)
+    wt_encoded = torch.from_numpy(vocab.encode(sequence))
+    if wt_encoded.dim() == 2:
+        wt_encoded = wt_encoded[0]
+    start = int(vocab.prepend_bos)
+    end = wt_encoded.size(-1) - int(vocab.append_eos)
+    wt_encoded = wt_encoded[start:end]
+
+    wt_logits = logits[torch.arange(len(wt_encoded)), wt_encoded].unsqueeze(1)
+    return logits - wt_logits
 
 
 @torch.no_grad()

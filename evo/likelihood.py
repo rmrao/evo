@@ -3,13 +3,36 @@ import torch
 import torch.nn as nn
 import numpy as np
 import esm
-from typing import Union, List
+from typing import Union, List, Sequence, Optional, Tuple
 from functools import partial
+import pandas as pd
 
 
 from .tokenization import Vocab
 from .tensor import batched_iterator
 from .align import MSA
+
+
+IntSeq = Union[Sequence[int], np.ndarray, torch.Tensor]
+
+
+def mask_and_repeat(tokens: torch.Tensor, indices: IntSeq, vocab: Vocab) -> torch.Tensor:
+    seqlen = len(indices)
+    repeat_dims = [1] * tokens.dim()
+    tokens = tokens.unsqueeze(0).repeat(seqlen, *repeat_dims)
+    if tokens.dim() == 2:
+        tokens[torch.arange(seqlen), indices] = vocab.mask_idx
+    else:
+        tokens[torch.arange(seqlen), 0, indices] = vocab.mask_idx
+    return tokens
+
+
+def select_indices(logits: torch.Tensor, batch_indices, position_indices):
+    if logits.dim() == 3:
+        out = logits[batch_indices, position_indices]
+    else:
+        out = logits[batch_indices, 0, position_indices]
+    return out
 
 
 @torch.no_grad()
@@ -20,44 +43,40 @@ def sequence_logits(
     verbose: bool = False,
     mask_positions: bool = True,
     max_tokens: int = 2 ** 14,
+    indices: Optional[IntSeq] = None,
+    parallel: bool = False,
 ) -> torch.Tensor:
 
     device = next(model.parameters()).device
-
     tokens = torch.from_numpy(vocab.encode(sequence)).to(device)
-    start = int(vocab.prepend_bos)
-    end = tokens.size(-1) - int(vocab.append_eos)
-    if mask_positions:
-        repeat_dims = [1] * tokens.dim()
-        tokens = tokens.unsqueeze(0).repeat(end - start, *repeat_dims)
-        if tokens.dim() == 2:
-            tokens[torch.arange(end - start), torch.arange(start, end)] = vocab.mask_idx
-        else:
-            tokens[torch.arange(end - start), 0, torch.arange(start, end)] = vocab.mask_idx
+    if parallel and torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+        max_tokens *= torch.cuda.device_count()
 
-        logits = torch.zeros((end - start, len(vocab)), device=device)
+    if indices is None:
+        start = int(vocab.prepend_bos)
+        end = tokens.size(-1) - int(vocab.append_eos)
+        indices = torch.arange(start, end)
+
+    seqlen = len(indices)
+    if mask_positions:
+        tokens = mask_and_repeat(tokens, indices, vocab)
+
+        logits = torch.zeros((seqlen, len(vocab)), device=device)
         batch_size = max(1, max_tokens // np.prod(tokens.size()[1:]))
         for i, batch in enumerate(
             batched_iterator(tokens, batch_size=batch_size, device=device, verbose=verbose)
-        ):
+        ):  # type: Tuple[int, torch.Tensor]
             idx = i * batch_size
 
             batch_indices = torch.arange(batch.size(0))
+            position_indices = indices[idx : idx + batch_size]
             out = model(batch)["logits"]
-            if tokens.dim() == 2:
-                out = out[
-                    batch_indices,
-                    batch_indices + start + idx,
-                ]
-            else:
-                out = out[
-                    batch_indices,
-                    0,
-                    batch_indices + start + idx,
-                ]
+            out = select_indices(out, batch_indices, position_indices)
             logits[idx : idx + batch_size] = out
     else:
-        logits = model(tokens.unsqueeze(0))["logits"][0, start:end]
+        out = model(tokens.unsqueeze(0))["logits"]
+        logits = select_indices(out, torch.arange(seqlen), indices)
     return logits
 
 
@@ -69,20 +88,51 @@ def sequence_mutant_scores(
     verbose: bool = False,
     mask_positions: bool = True,
     max_tokens: int = 2 ** 14,
-) -> torch.Tensor:
-    print("hello!")
+    indices: Optional[IntSeq] = None,
+    parallel: bool = False,
+) -> pd.DataFrame:
     logits = sequence_logits(
-        model, vocab, sequence, verbose, mask_positions, max_tokens
+        model,
+        vocab,
+        sequence,
+        verbose,
+        mask_positions,
+        max_tokens,
+        indices,
+        parallel,
     ).log_softmax(-1)
     wt_encoded = torch.from_numpy(vocab.encode(sequence))
     if wt_encoded.dim() == 2:
         wt_encoded = wt_encoded[0]
-    start = int(vocab.prepend_bos)
-    end = wt_encoded.size(-1) - int(vocab.append_eos)
-    wt_encoded = wt_encoded[start:end]
+
+    if indices is None:
+        start = int(vocab.prepend_bos)
+        end = wt_encoded.size(-1) - int(vocab.append_eos)
+        indices = torch.arange(start, end)
+
+    wt_encoded = wt_encoded[indices]  # type: ignore
 
     wt_logits = logits[torch.arange(len(wt_encoded)), wt_encoded].unsqueeze(1)
-    return logits - wt_logits
+    scores = logits - wt_logits
+
+    alphabet = Vocab.from_fasta_standard().tokens[:20]
+    remap = [vocab.index(tok) for tok in alphabet]
+    scores = scores[:, remap].cpu().numpy()
+
+    index = pd.Index(list(alphabet), name="mut_aa")
+    columns = pd.MultiIndex.from_arrays(
+        [
+            indices.tolist() if isinstance(indices, torch.Tensor) else indices,
+            [vocab.token(idx) for idx in wt_encoded],
+        ],
+        names=["Position", "wt_aa"],
+    )
+    df = pd.DataFrame(
+        data=scores.T,
+        index=index,
+        columns=columns,
+    )
+    return df
 
 
 @torch.no_grad()
